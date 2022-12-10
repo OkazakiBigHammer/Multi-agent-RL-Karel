@@ -12,7 +12,7 @@ def main():
     #s, _, _, _, _ = s_gen.generate_single_state(8, 8, 0.2)
     #_world.set_new_state(s)
     #dsl = get_DSL_option_v2(dsl_type='prob', seed=0, environment='karel') 
-    f = open('./datasets_options_reconstruction_En_Pei/len20.txt', 'r')
+    f = open('./datasets_options_reconstruction_En_Pei/len100.txt', 'r')
     program = f.readline()
     program_str = program.strip()
     print("input program string: ", program_str)

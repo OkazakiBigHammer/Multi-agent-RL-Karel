@@ -12,11 +12,18 @@ import dsl_data
 
 ir_label_idx = -1
 
-def newlabel():
+def newLabel():
     global ir_label_idx
     ir_label_idx += 1
     return ir_label_idx
 
+def getStartLabel(stmt_ir_code):
+    # receive a list of ir code, return a corresponding 
+    start_label = stmt_ir_code[0][0]
+    if start_label == None:
+        start_label = newLabel()
+        stmt_ir_code[0][0] = start_label
+    return start_label
 
 def check_and_apply(queue, rule):
     r = rule[0].split()
@@ -56,7 +63,7 @@ rules.append(('DEF run m( stmt m)', r_prog, []))
 def r_stmt(t, ir):
     stmt = t[0]
     ir_code = ir[0]
-
+    
     def fn(k, n):
         if n > MAX_FUNC_CALL: return k, n, False
         return stmt(k, n + 1)
@@ -86,13 +93,12 @@ rules.append(('stmt stmt', r_stmt_stmt, []))
 def r_if(t, ir):
     cond, stmt = t[2], t[5]
     ir_cond, ir_stmt = ir[2], ir[5]
-    true_label = newlabel()
-    false_label = newlabel()
+    true_label = getStartLabel(ir_stmt)
+    false_label = newLabel()
     # assuming ir_cond only has one line of (label, bool_or_action, goto_label_true, goto_label_false)
     ir_cond[0][2], ir_cond[0][3] = true_label, false_label
-    ir_stmt[0][0] = true_label
     # add null instruction for false branch
-    ir_stmt_false = [[false_label, None, None, None]]
+    ir_stmt_next = [[false_label, None, None, None]]
 
     def fn(k, n):
         if n > MAX_FUNC_CALL: return k, n, False
@@ -100,19 +106,21 @@ def r_if(t, ir):
         if not s: return k, n, s
         if c: return stmt(k, n)
         else: return k, n, s
-    return [('if_stmt', fn, ir_cond + ir_stmt + ir_stmt_false)]
+    return [('if_stmt', fn, ir_cond + ir_stmt + ir_stmt_next)]
 rules.append(('IF c( cond c) i( stmt i)', r_if, []))
 
 
 def r_ifelse(t, ir):
     cond, stmt1, stmt2 = t[2], t[5], t[9]
     ir_cond, ir_stmt_true, ir_stmt_false = ir[2], ir[5], ir[9]
-    true_label = newlabel()
-    false_label = newlabel()
-    ir_cond[0][2] = true_label 
-    ir_cond[0][3] = false_label
-    ir_stmt_true[0][0] = true_label
-    ir_stmt_false[0][0] = false_label
+    true_label = getStartLabel(ir_stmt_true)
+    false_label = getStartLabel(ir_stmt_false)
+    next_label = newLabel()
+    ir_cond[0][2], ir_cond[0][3] = true_label, false_label
+    ir_stmt_true[-1][2], ir_stmt_true[-1][3] = next_label, next_label
+    ir_stmt_false[-1][2], ir_stmt_false[-1][3] = next_label, next_label 
+    # add null instruction for next part of r_ifelse
+    ir_stmt_next = [[next_label, None, None, None]]
 
     def fn(k, n):
         if n > MAX_FUNC_CALL: return k, n, False
@@ -120,21 +128,20 @@ def r_ifelse(t, ir):
         if not s: return k, n, s
         if c: return stmt1(k, n)
         else: return stmt2(k, n)
-    return [('ifelse_stmt', fn, ir_cond + ir_stmt_true + ir_stmt_false)]
+    return [('ifelse_stmt', fn, ir_cond + ir_stmt_true + ir_stmt_false + ir_stmt_next)]
 rules.append(('IFELSE c( cond c) i( stmt i) ELSE e( stmt e)', r_ifelse, []))
 
 
 def r_while(t, ir):
     cond, stmt = t[2], t[5]
     ir_cond, ir_stmt = ir[2], ir[5]
-    cond_label = newlabel()
-    true_label = newlabel()
-    false_label = newlabel()
+    cond_label = getStartLabel(ir_cond)
+    true_label = getStartLabel(ir_stmt)
+    false_label = newLabel()
     ir_cond[0][0], ir_cond[0][2], ir_cond[0][3] = cond_label, true_label, false_label
-    ir_stmt[0][0] = true_label
     ir_stmt[-1][2], ir_stmt[-1][3] = cond_label, cond_label
     # add null instruction for false branch
-    ir_stmt_false = [[false_label, None, None, None]]
+    ir_stmt_next = [[false_label, None, None, None]]
 
     def fn(k, n):
         if n > MAX_FUNC_CALL: return k, n, False
@@ -146,16 +153,27 @@ def r_while(t, ir):
             k, n, s, c = cond(k, n)
             if not s: return k, n, s
         return k, n, s
-    return [('while_stmt', fn, ir_cond + ir_stmt + ir_stmt_false)]
+    return [('while_stmt', fn, ir_cond + ir_stmt + ir_stmt_next)]
 rules.append(('WHILE c( cond c) w( stmt w)', r_while, []))
 
 
 def r_repeat(t, ir):
     cste, stmt = t[1], t[3]
     ir_stmt = ir[3]
-    ir_stmt_repeat = []
-    for _ in range(cste()):
-        ir_stmt_repeat += copy.deepcopy(ir_stmt)
+    ir_stmt_repeat = [] + ir_stmt
+    for _ in range(cste() - 1):
+        stmt_copy = copy.deepcopy(ir_stmt)
+        # update label number
+        label_dict = {}
+        for i in range(len(stmt_copy)):
+            for line_idx in [0, 2, 3]:
+                if stmt_copy[i][line_idx] != None:
+                    if stmt_copy[i][line_idx] not in label_dict:
+                        label_dict[stmt_copy[i][line_idx]] = newLabel()
+                    stmt_copy[i][line_idx] = label_dict[stmt_copy[i][line_idx]]
+
+        ir_stmt_repeat += stmt_copy
+
 
     def fn(k, n):
         if n > MAX_FUNC_CALL: return k, n, False
@@ -189,7 +207,7 @@ def r_cond2(t, ir):
         if n > MAX_FUNC_CALL: return k, n, False, False
         k, n, s, c = cond(k, n)
         return k, n, s, not c
-    return [('cond', fn, r_cond)]
+    return [('cond', fn, ir_cond)]
 rules.append(('not c( cond c)', r_cond2, []))
 
 
@@ -269,5 +287,21 @@ def parse(program, environment='karel'):
             return None, False
         loop_id += 1
         print("*" * 100)
-    return queue[0][1], True, queue[0][2]
+
+    # fix and adjust the overall instruction line number
+    all_ir_code = queue[0][2]
+    all_line_dict = {} # old_line_idx: new_line_idx
+    for i in range(len(all_ir_code)):
+        if all_ir_code[i][0] != None:
+            all_line_dict[all_ir_code[i][0]] = i
+        all_ir_code[i][0] = i
+
+    for i in range(len(all_ir_code)):
+        goto_label_true, goto_label_false = all_ir_code[i][2], all_ir_code[i][3]
+        if goto_label_true != None:
+            all_ir_code[i][2] = all_line_dict[goto_label_true]
+        if goto_label_false != None:
+            all_ir_code[i][3] = all_line_dict[goto_label_false]
+
+    return queue[0][1], True, all_ir_code
 
